@@ -921,6 +921,59 @@ def test_should_bypass_proxies_win_registry(url, expected, override, monkeypatch
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Test only on Windows")
+@pytest.mark.parametrize(
+    "url, expected",
+    (
+        # Exact entry matches the host itself.
+        ("http://google.com/", True),
+        ("http://google.com:5000/v1.0/", True),
+        # An entry must not match a longer hostname that merely starts
+        # with it; otherwise "google.com" would bypass the proxy for
+        # the attacker-controlled "google.com.evil.com" (GH#7629).
+        ("http://google.com.evil.com/", False),
+        ("http://mail.google.com/", False),
+        # Wildcards still behave as globs.
+        ("http://a.example.net/", True),
+        ("http://deep.sub.example.net/", True),
+        ("http://example.net/", False),
+        ("http://other.com/", False),
+    ),
+)
+def test_should_bypass_proxies_win_registry_anchored_match(
+    url, expected, monkeypatch
+):
+    """Registry ProxyOverride entries are matched against the full host,
+    not just its prefix.
+    """
+    import winreg
+
+    class RegHandle:
+        def Close(self):
+            pass
+
+    ie_settings = RegHandle()
+
+    def OpenKey(key, subkey):
+        return ie_settings
+
+    def QueryValueEx(key, value_name):
+        if key is ie_settings:
+            if value_name == "ProxyEnable":
+                return [1]
+            elif value_name == "ProxyOverride":
+                return ["google.com;*.example.net"]
+
+    monkeypatch.setenv("http_proxy", "")
+    monkeypatch.setenv("https_proxy", "")
+    monkeypatch.setenv("ftp_proxy", "")
+    monkeypatch.setenv("no_proxy", "")
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setattr(winreg, "OpenKey", OpenKey)
+    monkeypatch.setattr(winreg, "QueryValueEx", QueryValueEx)
+    assert should_bypass_proxies(url, None) == expected
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Test only on Windows")
 def test_should_bypass_proxies_win_registry_bad_values(monkeypatch):
     """Tests for function should_bypass_proxies to check if proxy
     can be bypassed or not with Windows invalid registry settings.
